@@ -1,6 +1,6 @@
 # Dyno Proxy
 
-A lightweight load balancer for Heroku apps.
+A lightweight load balancer to run in dynos alongside Heroku apps.
 
 Add buildpack and rebuild app.
 ```
@@ -20,7 +20,9 @@ path = "/anything"
 to = "https://httpbin.org"
 ```
 
-The proxy is active by default. To disable, `heroku config:set DISABLE_DYNO_PROXY=true` or remove buildpack and rebuild.
+Any undefined routes will hit default app.
+
+The proxy is active by default. To disable, `heroku config:set DISABLE_DYNO_PROXY=true`.
 
 More info on
 - [Configure routing rules](docs/rules.md)
