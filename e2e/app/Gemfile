@@ -1,0 +1,10 @@
+# Minimal Rack app the dyno-proxy e2e harness (e2e/run.sh) deploys.
+source "https://rubygems.org"
+
+ruby "3.4.7"
+
+gem "rack", "~> 3.1"
+# heroku/ruby's default web process for a non-Rails Rack app (no Procfile) is
+# `bundle exec rackup ...` on both classic and CNB; Rack 3 split rackup out.
+gem "rackup", "~> 2.2"
+gem "puma", "~> 7.0"

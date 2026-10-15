@@ -1,0 +1,5 @@
+#!/bin/sh
+
+# This buildpack will always be used when specified
+echo "Dyno-Proxy"
+exit 0

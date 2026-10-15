@@ -1,0 +1,42 @@
+name: Test Dyno Proxy (All Commits)
+
+on:
+  push:
+
+jobs:
+
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Install Traefik
+      # The e2e conformance suite boots the real Traefik binary for its
+      # live-traffic assertions. Without it those scenarios t.Skip; installing it
+      # here ensures Traefik passes the entire conformance table in CI.
+      #
+      # The version is DERIVED from the canonical Go const rather than hardcoded,
+      # so this workflow file never needs bumping. The bump-traefik workflow can
+      # therefore edit only non-workflow files and run under the default
+      # GITHUB_TOKEN (which lacks the `workflow` scope). Keep the grep in sync
+      # with the const's shape in internal/traefik/traefik.go.
+      run: |
+        TRAEFIK_VERSION=$(grep -oE 'defaultTraefikVersion = "v[0-9]+\.[0-9]+\.[0-9]+"' \
+                            internal/traefik/traefik.go \
+                          | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')
+        echo "Derived TRAEFIK_VERSION=${TRAEFIK_VERSION} from traefik.go"
+        curl -fsSL -o /tmp/traefik.tar.gz \
+          "https://github.com/traefik/traefik/releases/download/${TRAEFIK_VERSION}/traefik_${TRAEFIK_VERSION}_linux_amd64.tar.gz"
+        tar -xzf /tmp/traefik.tar.gz -C /tmp traefik
+        sudo install /tmp/traefik /usr/local/bin/traefik
+        traefik version
+
+    - name: Run all tests
+      run: make test

@@ -1,0 +1,82 @@
+=== FILE: app.dyno-proxy-static.toml ===
+[accessLog]
+  format = "common"
+  [accessLog.fields]
+    defaultMode = "drop"
+    [accessLog.fields.headers]
+      defaultMode = "drop"
+      [accessLog.fields.headers.names]
+        Host = "keep"
+        X-Request-ID = "keep"
+    [accessLog.fields.names]
+      ClientUsername = "drop"
+      Duration = "keep"
+      RequestHeader = "drop"
+      RequestHost = "keep"
+      RequestMethod = "keep"
+      RequestPath = "keep"
+      RequestProtocol = "drop"
+      RequestScheme = "drop"
+      RequestURI = "keep"
+      ResponseCode = "keep"
+      ResponseSize = "keep"
+      ServiceURL = "keep"
+
+[entryPoints]
+  [entryPoints.web]
+    address = ":8888"
+    [entryPoints.web.forwardedHeaders]
+      trustedIPs = ["0.0.0.0/0"]
+
+[global]
+  checkNewVersion = false
+  sendAnonymousUsage = false
+
+[log]
+  format = "common"
+  level = "INFO"
+
+[providers]
+  [providers.file]
+    filename = "<DIR>/app.dyno-proxy-dynamic.toml"
+    watch = true
+=== FILE: app.dyno-proxy-dynamic.toml ===
+[http]
+  [http.middlewares]
+    [http.middlewares.route-0-plugin-2]
+      [http.middlewares.route-0-plugin-2.stripPrefix]
+        prefixes = ["/x"]
+    [http.middlewares.route-0-set-headers]
+      [http.middlewares.route-0-set-headers.headers]
+        [http.middlewares.route-0-set-headers.headers.customRequestHeaders]
+          X-A = "1"
+    [http.middlewares.route-0-set-path-1]
+      [http.middlewares.route-0-set-path-1.replacePath]
+        path = "/y"
+  [http.routers]
+    [http.routers.app]
+      rule = "PathPrefix(`/`)"
+      service = "app"
+      entryPoints = ["web"]
+      priority = 1
+    [http.routers.route-0]
+      rule = "PathPrefix(`/x`)"
+      service = "route-0"
+      entryPoints = ["web"]
+      priority = 10
+      middlewares = ["route-0-set-path-1", "route-0-plugin-2", "route-0-set-headers"]
+  [http.services]
+    [http.services.app]
+      [http.services.app.loadBalancer]
+        passHostHeader = true
+        strategy = "p2c"
+
+        [[http.services.app.loadBalancer.servers]]
+          url = "http://localhost:5000"
+    [http.services.route-0]
+      [http.services.route-0.loadBalancer]
+        passHostHeader = false
+        strategy = "p2c"
+
+        [[http.services.route-0.loadBalancer.servers]]
+          url = "http://localhost:8080"

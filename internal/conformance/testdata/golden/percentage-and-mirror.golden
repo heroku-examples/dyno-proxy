@@ -1,0 +1,89 @@
+=== FILE: app.dyno-proxy-static.toml ===
+[accessLog]
+  format = "common"
+  [accessLog.fields]
+    defaultMode = "drop"
+    [accessLog.fields.headers]
+      defaultMode = "drop"
+      [accessLog.fields.headers.names]
+        Host = "keep"
+        X-Request-ID = "keep"
+    [accessLog.fields.names]
+      ClientUsername = "drop"
+      Duration = "keep"
+      RequestHeader = "drop"
+      RequestHost = "keep"
+      RequestMethod = "keep"
+      RequestPath = "keep"
+      RequestProtocol = "drop"
+      RequestScheme = "drop"
+      RequestURI = "keep"
+      ResponseCode = "keep"
+      ResponseSize = "keep"
+      ServiceURL = "keep"
+
+[entryPoints]
+  [entryPoints.web]
+    address = ":8888"
+    [entryPoints.web.forwardedHeaders]
+      trustedIPs = ["0.0.0.0/0"]
+
+[global]
+  checkNewVersion = false
+  sendAnonymousUsage = false
+
+[log]
+  format = "common"
+  level = "INFO"
+
+[providers]
+  [providers.file]
+    filename = "<DIR>/app.dyno-proxy-dynamic.toml"
+    watch = true
+=== FILE: app.dyno-proxy-dynamic.toml ===
+[http]
+  [http.routers]
+    [http.routers.app]
+      rule = "PathPrefix(`/`)"
+      service = "app"
+      entryPoints = ["web"]
+      priority = 1
+    [http.routers.percentage-0-0-experiment]
+      rule = "Path(`/exp`) && HeaderRegexp(`x-request-id`, `[0-7][0-9a-f]$`)"
+      service = "percentage-0-0-experiment"
+      entryPoints = ["web"]
+      priority = 50
+    [http.routers.percentage-1-0-experiment]
+      rule = "Path(`/shadow`)"
+      service = "percentage-1-0-mirror"
+      entryPoints = ["web"]
+      priority = 50
+  [http.services]
+    [http.services.app]
+      [http.services.app.loadBalancer]
+        passHostHeader = true
+        strategy = "p2c"
+
+        [[http.services.app.loadBalancer.servers]]
+          url = "http://localhost:5000"
+    [http.services.percentage-0-0-experiment]
+      [http.services.percentage-0-0-experiment.loadBalancer]
+        passHostHeader = false
+        strategy = "p2c"
+
+        [[http.services.percentage-0-0-experiment.loadBalancer.servers]]
+          url = "http://localhost:9001"
+    [http.services.percentage-1-0-experiment]
+      [http.services.percentage-1-0-experiment.loadBalancer]
+        passHostHeader = false
+        strategy = "p2c"
+
+        [[http.services.percentage-1-0-experiment.loadBalancer.servers]]
+          url = "http://localhost:9002"
+    [http.services.percentage-1-0-mirror]
+      [http.services.percentage-1-0-mirror.mirroring]
+        service = "app"
+
+        [[http.services.percentage-1-0-mirror.mirroring.mirrors]]
+          name = "percentage-1-0-experiment"
+          percent = 100

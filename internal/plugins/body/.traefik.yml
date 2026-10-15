@@ -1,0 +1,14 @@
+displayName: Body Parser
+type: middleware
+import: github.com/heroku/dyno-proxy/plugins/body
+summary: 'Parses the request body and exposes selected fields as X-Body-* headers for routing'
+
+# Medias associated to the plugin (optional)
+# iconPath: foo/icon.png
+# bannerPath: foo/banner.png
+
+testData:
+  fields:
+    - name
+    - user_id
+    - organization.id

@@ -1,0 +1,105 @@
+name: Build Binaries and Publish Buildpack
+
+# Builds the dyno-proxy Go binaries for every platform in `make build-all` and
+# uploads them as GitHub Actions artifacts (binaries are not committed to git).
+# The publish job then downloads those exact binaries and packages them into the
+# Cloud Native Buildpack image on the GitHub Container Registry (ghcr.io), tagged
+# with a unique per-commit version (<commit count>.<short sha>). The moving
+# :latest tag is only updated on pushes to main. On main, the classic buildpack
+# tarball (dyno-proxy-buildpack.tgz) is also attached to a GitHub Release.
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history so `git rev-list --count HEAD` (Makefile VERSION) is correct
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24.3'
+
+    - name: Build for all platforms
+      run: make build-all
+
+    - name: Upload binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: dyno-proxy-binaries
+        path: bin/dyno-proxy-*
+        if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the GitHub Release
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # for the <commit count>.<short sha> tag
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: dyno-proxy-binaries
+          path: bin
+
+      - name: Set up pack
+        uses: buildpacks/github-actions/setup-pack@v6.1.1
+        with:
+          pack-version: 0.40.9
+
+      - name: Set up crane
+        # Provides `crane`, used to move :latest onto the already-published
+        # per-commit image without rebuilding.
+        uses: buildpacks/github-actions/setup-tools@v6.1.1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image name and unique tag
+        id: img
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          # GHCR image names must be lowercase.
+          echo "name=ghcr.io/${REPO,,}-buildpack" >> "$GITHUB_OUTPUT"
+          echo "tag=$(git rev-list --count HEAD).$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish per-commit tag
+        # Packages the downloaded linux binaries + plugin sources via the
+        # Makefile; no rebuild happens here.
+        run: make buildpack-package IMAGE=${{ steps.img.outputs.name }}:${{ steps.img.outputs.tag }} TARGET=linux/amd64
+
+      - name: Move :latest (main only)
+        if: github.ref == 'refs/heads/main'
+        run: crane tag ${{ steps.img.outputs.name }}:${{ steps.img.outputs.tag }} latest
+
+      - name: Package classic buildpack tarball
+        run: make buildpack-tarball
+
+      - name: Upload tarball to GitHub Release (main only)
+        # The newest release is what /releases/latest/download/... serves.
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.img.outputs.tag }}
+        run: |
+          gh release create "$TAG" dyno-proxy-buildpack.tgz \
+            --title "$TAG" --target "$GITHUB_SHA" --latest \
+            --notes "Classic buildpack: \`heroku buildpacks:add https://github.com/${{ github.repository }}/releases/download/${TAG}/dyno-proxy-buildpack.tgz\`"

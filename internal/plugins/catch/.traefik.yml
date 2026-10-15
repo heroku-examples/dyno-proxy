@@ -1,0 +1,23 @@
+# The name of your plugin as displayed in the Plugins Catalog web UI.
+displayName: Catch & Decrypt
+
+# For now, `middleware` is the only type available.
+type: middleware
+
+# The import path of your plugin.
+import: github.com/heroku/dyno-proxy/plugins/catch
+
+# A brief description of what your plugin is doing.
+summary: 'Catches headers and decrypts them'
+
+# Medias associated to the plugin (optional)
+# iconPath: foo/icon.png
+# bannerPath: foo/banner.png
+
+# Configuration data for your plugin.
+# This is mandatory,
+# and Plugins Catalog will try to execute the plugin with the data you provide as part of its startup validity tests.
+testData:
+  catch:
+    - header: X-FORWARDED-DATABASE-URL
+      decrypt: "$DYNO_PROXY_ENCRYPTION_KEY"

@@ -1,0 +1,211 @@
+name: Bump Traefik default version
+
+# Weekly maintenance job that adopts the newest STABLE traefik/traefik release
+# on the CURRENT major line, but only once it has soaked for >= 7 days and only
+# if `make test` (unit + render golden + e2e conformance against the REAL new
+# binary) passes. It then opens an idempotent PR with the bump.
+#
+# WHY NO PAT: the default GITHUB_TOKEN cannot create/update files under
+# .github/workflows/ (it lacks the `workflow` scope). This job therefore edits
+# ONLY non-workflow files: internal/traefik/traefik.go (the canonical
+# const, WITH `v`), buildpack/bin/compile and buildpack/bin/build (defaults,
+# NO `v`). .github/workflows/test.yml derives its Traefik version FROM the
+# traefik.go const, so the bumper never has to touch a workflow file.
+#
+# PREREQUISITE (human, one-time): enable the repo/org setting
+#   Settings > Actions > General > "Allow GitHub Actions to create and approve
+#   pull requests" — otherwise `gh pr create` with GITHUB_TOKEN is refused.
+#
+# SECURITY NOTE: every ${{ ... }} expression is bound to an env: var and only
+# referenced as a shell "$VAR" inside run: blocks (never interpolated directly
+# into the script body), per the GitHub Actions script-injection guidance.
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'   # Mondays 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: bump-traefik
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    # Must match the other workflows: an org IP allow list blocks GitHub-hosted
+    # runners at checkout, so this MUST be the self-hosted label, not ubuntu-latest.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Determine current and candidate versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Current default = canonical Go const (WITH v prefix). `|| true` keeps
+          # a grep miss (format drift) from tripping `set -e` before the explicit
+          # guard below can emit a clear ::error:: annotation.
+          CUR_V=$(grep -oE 'defaultTraefikVersion = "v[0-9]+\.[0-9]+\.[0-9]+"' \
+                    internal/traefik/traefik.go \
+                  | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || true)
+          if [ -z "$CUR_V" ]; then
+            echo "::error::could not read current version from traefik.go"
+            exit 1
+          fi
+          CUR_MAJOR=${CUR_V%%.*}   # e.g. v3 — the v4 guard below pins this line
+
+          # Candidate = highest STABLE (non-draft, non-prerelease) release on the
+          # SAME major line whose published_at is >= 7 days (604800s) old.
+          #   - draft/prerelease filtered FIRST (their published_at can be null).
+          #   - the ^${CUR_MAJOR}\. regex is the major-version guard (no auto-v4).
+          #   - fromdateiso8601 < (now - 604800) is the 7-day SOAK gate.
+          CAND_V=$(gh api --paginate repos/traefik/traefik/releases \
+            --jq ".[]
+                  | select(.draft == false and .prerelease == false)
+                  | select(.tag_name | test(\"^${CUR_MAJOR}\\\\.[0-9]+\\\\.[0-9]+$\"))
+                  | select((.published_at | fromdateiso8601) < (now - 604800))
+                  | .tag_name" \
+            | sort -V | tail -1)
+
+          if [ -z "$CAND_V" ]; then
+            echo "No aged stable ${CUR_MAJOR}.x release found; nothing to do."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Strictly newer? Semver via sort -V, never string compare.
+          HIGHEST=$(printf '%s\n%s\n' "$CUR_V" "$CAND_V" | sort -V | tail -1)
+          if [ "$CAND_V" = "$CUR_V" ] || [ "$HIGHEST" != "$CAND_V" ]; then
+            echo "Candidate ${CAND_V} is not newer than current ${CUR_V}; nothing to do."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Current ${CUR_V}  ->  candidate ${CAND_V}"
+          {
+            echo "cur_v=${CUR_V}"
+            echo "cur_nov=${CUR_V#v}"
+            echo "cand_v=${CAND_V}"
+            echo "cand_nov=${CAND_V#v}"
+            echo "branch=bump-traefik-${CAND_V#v}"
+            echo "proceed=true"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Skip if a PR for this version already exists (idempotency)
+        id: idem
+        if: steps.versions.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.versions.outputs.branch }}
+        run: |
+          set -euo pipefail
+          # --state all also skips versions whose PR was already merged or closed.
+          # (Once a bump merges, traefik.go's const advances and the newer-than
+          # check above naturally stops re-proposing it — this is a fast path.)
+          COUNT=$(gh pr list --state all --head "$BRANCH" --json number --jq 'length')
+          if [ "$COUNT" != "0" ]; then
+            echo "A PR for ${BRANCH} already exists; skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply version bump to the three literal sites
+        if: steps.idem.outputs.proceed == 'true'
+        env:
+          CUR_V: ${{ steps.versions.outputs.cur_v }}
+          CUR_NOV: ${{ steps.versions.outputs.cur_nov }}
+          CAND_V: ${{ steps.versions.outputs.cand_v }}
+          CAND_NOV: ${{ steps.versions.outputs.cand_nov }}
+        run: |
+          set -euo pipefail
+
+          # Escape dots so they are literal in the sed patterns (belt-and-suspenders
+          # on top of the anchored patterns below).
+          esc() { printf '%s' "$1" | sed 's/[.]/\\./g'; }
+          CVE=$(esc "$CUR_V")
+          CNOVE=$(esc "$CUR_NOV")
+
+          # 1. Go const — WITH v prefix (canonical): const defaultTraefikVersion = "vX.X.X"
+          sed -i -E "s/\"${CVE}\"/\"${CAND_V}\"/" internal/traefik/traefik.go
+
+          # 2 & 3. Buildpack shell defaults — NO v prefix. The ":-X}" anchor keeps
+          #        the match specific to the TRAEFIK_VERSION default expansion.
+          sed -i -E "s/:-${CNOVE}\}/:-${CAND_NOV}}/" buildpack/bin/compile
+          sed -i -E "s/:-${CNOVE}\}/:-${CAND_NOV}}/" buildpack/bin/build
+
+          # Fail loudly if any site did not actually change (format drift).
+          grep -q "defaultTraefikVersion = \"${CAND_V}\"" internal/traefik/traefik.go
+          grep -q ":-${CAND_NOV}}" buildpack/bin/compile
+          grep -q ":-${CAND_NOV}}" buildpack/bin/build
+          echo "All three sites updated to ${CAND_V}."
+          git --no-pager diff
+
+      - name: Install candidate Traefik binary
+        if: steps.idem.outputs.proceed == 'true'
+        env:
+          CAND_V: ${{ steps.versions.outputs.cand_v }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/traefik.tar.gz \
+            "https://github.com/traefik/traefik/releases/download/${CAND_V}/traefik_${CAND_V}_linux_amd64.tar.gz"
+          tar -xzf /tmp/traefik.tar.gz -C /tmp traefik
+          sudo install /tmp/traefik /usr/local/bin/traefik
+          traefik version
+
+      - name: Run tests against the new binary (hard gate)
+        if: steps.idem.outputs.proceed == 'true'
+        # The e2e conformance suite boots the REAL new binary just installed.
+        # If make test fails, the workflow fails and NO PR is opened.
+        run: make test
+
+      - name: Open pull request
+        if: steps.idem.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CUR_V: ${{ steps.versions.outputs.cur_v }}
+          CAND_V: ${{ steps.versions.outputs.cand_v }}
+          BRANCH: ${{ steps.versions.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add internal/traefik/traefik.go \
+                  buildpack/bin/compile buildpack/bin/build
+          git commit -m "chore: bump default Traefik ${CUR_V} -> ${CAND_V}"
+          git push --set-upstream origin "$BRANCH"
+
+          cat > /tmp/pr-body.md <<EOF
+          Automated bump of the default Traefik version from \`${CUR_V}\` to \`${CAND_V}\`.
+
+          - Release soaked >= 7 days on the traefik/traefik same-major line before adoption.
+          - \`make test\` (unit + render golden + e2e conformance against the real \`${CAND_V}\` binary) passed in this run.
+
+          Updated sites:
+          - \`internal/traefik/traefik.go\` (const, with \`v\` prefix)
+          - \`buildpack/bin/compile\` (default, no \`v\` prefix)
+          - \`buildpack/bin/build\` (default, no \`v\` prefix)
+
+          \`.github/workflows/test.yml\` derives its version from the Go const, so it needs no edit.
+
+          NOTE: this branch was pushed with GITHUB_TOKEN, so test.yml does not re-run on it automatically. Push an empty commit if you want fresh PR CI.
+          EOF
+
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore: bump default Traefik ${CUR_V} -> ${CAND_V}" \
+            --body-file /tmp/pr-body.md

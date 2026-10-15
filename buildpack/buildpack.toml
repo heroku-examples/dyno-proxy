@@ -1,0 +1,18 @@
+# buildpack.toml
+api = "0.10"
+
+[buildpack]
+id = "heroku/dyno-proxy"
+version = "0.0.2"
+name = "dyno-proxy"
+
+[[stacks]]
+id = "*"
+
+[[targets]]
+os = "linux"
+arch = "arm64"
+
+[[targets]]
+os = "linux"
+arch = "amd64"

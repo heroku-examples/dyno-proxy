@@ -1,0 +1,88 @@
+=== FILE: app.dyno-proxy-static.toml ===
+[accessLog]
+  format = "common"
+  [accessLog.fields]
+    defaultMode = "drop"
+    [accessLog.fields.headers]
+      defaultMode = "drop"
+      [accessLog.fields.headers.names]
+        Host = "keep"
+        X-Request-ID = "keep"
+    [accessLog.fields.names]
+      ClientUsername = "drop"
+      Duration = "keep"
+      RequestHeader = "drop"
+      RequestHost = "keep"
+      RequestMethod = "keep"
+      RequestPath = "keep"
+      RequestProtocol = "drop"
+      RequestScheme = "drop"
+      RequestURI = "keep"
+      ResponseCode = "keep"
+      ResponseSize = "keep"
+      ServiceURL = "keep"
+
+[api]
+  basepath = "/.dyno-proxy/traefik"
+  dashboard = true
+
+[entryPoints]
+  [entryPoints.web]
+    address = ":8888"
+    [entryPoints.web.forwardedHeaders]
+      trustedIPs = ["0.0.0.0/0"]
+
+[global]
+  checkNewVersion = false
+  sendAnonymousUsage = false
+
+[log]
+  format = "common"
+  level = "INFO"
+
+[metrics]
+  [metrics.prometheus]
+    addEntryPointsLabels = true
+    addRoutersLabels = true
+    addServicesLabels = true
+    manualRouting = true
+
+[providers]
+  [providers.file]
+    filename = "<DIR>/app.dyno-proxy-dynamic.toml"
+    watch = true
+=== FILE: app.dyno-proxy-dynamic.toml ===
+[http]
+  [http.middlewares]
+    [http.middlewares.dyno_proxy_admin]
+      [http.middlewares.dyno_proxy_admin.basicAuth]
+        users = ["dyno_proxy_admin:$apr1$abc$def"]
+    [http.middlewares.metrics_strip_prefix]
+      [http.middlewares.metrics_strip_prefix.stripPrefix]
+        prefixes = ["/.dyno-proxy/metrics"]
+  [http.routers]
+    [http.routers.app]
+      rule = "PathPrefix(`/`)"
+      service = "app"
+      entryPoints = ["web"]
+      priority = 1
+    [http.routers.dashboard]
+      rule = "PathPrefix(`/.dyno-proxy/traefik`)"
+      service = "api@internal"
+      entryPoints = ["web"]
+      priority = 100
+      middlewares = ["dyno_proxy_admin"]
+    [http.routers.metrics]
+      rule = "PathPrefix(`/.dyno-proxy/metrics`)"
+      service = "prometheus@internal"
+      entryPoints = ["web"]
+      priority = 100
+      middlewares = ["dyno_proxy_admin"]
+  [http.services]
+    [http.services.app]
+      [http.services.app.loadBalancer]
+        passHostHeader = true
+        strategy = "p2c"
+
+        [[http.services.app.loadBalancer.servers]]
+          url = "http://localhost:5000"

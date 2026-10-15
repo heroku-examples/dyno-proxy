@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DYNO_PROXY_BUILD_DIR="${CNB_LAYERS_DIR}/dyno-proxy"
+
+# Download Traefik, the load balancer the dyno-proxy supervisor launches at
+# runtime.
+download_traefik() {
+  local version url
+  version="${TRAEFIK_VERSION:-3.7.13}"
+  case "$version" in v*) ;; *) version="v${version}" ;; esac
+  url="https://github.com/traefik/traefik/releases/download/${version}/traefik_${version}_linux_${CNB_TARGET_ARCH}.tar.gz"
+
+  if [[ -f "$DYNO_PROXY_BUILD_DIR/backend-version" ]] && grep -q "traefik ${version}" "$DYNO_PROXY_BUILD_DIR/backend-version"; then
+    echo "Using traefik ${version} from cache"
+    return
+  fi
+  echo "Downloading traefik ${version} from ${url}"
+  mkdir -p "${DYNO_PROXY_BUILD_DIR}/bin"
+  # Download+extract to a temp file and extract ONLY the traefik binary
+  # directly into the layer bin dir. The old form ran `tar xzf` in $PWD
+  # (the app dir during a CNB build) and left backend.tar.gz + a stray
+  # traefik behind on any early failure, polluting the app image.
+  tarball="$(mktemp)"
+  curl -sSf --location --retry 3 --retry-connrefused --connect-timeout 10 "${url}" -o "$tarball"
+  tar -xzf "$tarball" -C "${DYNO_PROXY_BUILD_DIR}/bin" traefik
+  rm -f "$tarball"
+  printf "traefik %s" "$version" > "${DYNO_PROXY_BUILD_DIR}/backend-version"
+}
+
+download_traefik
+
+# Copy dyno-proxy launcher shim and the current-platform binary.
+SCRIPT_DIR="$(dirname "$0")"
+mkdir -p "${DYNO_PROXY_BUILD_DIR}/bin"
+# cp "${SCRIPT_DIR}/dyno-proxy" "${DYNO_PROXY_BUILD_DIR}/bin/dyno-proxy"
+
+ARCH_BINARY="${SCRIPT_DIR}/dyno-proxy-linux-${CNB_TARGET_ARCH}"
+if [[ ! -f "$ARCH_BINARY" ]]; then
+  echo "dyno-proxy: no binary for target arch '${CNB_TARGET_ARCH}' (expected ${ARCH_BINARY})" >&2
+  echo "dyno-proxy: available:" >&2
+  ls -1 "${SCRIPT_DIR}"/dyno-proxy-linux-* >&2 2>/dev/null || echo "  (none)" >&2
+  exit 1
+fi
+cp "$ARCH_BINARY" "${DYNO_PROXY_BUILD_DIR}/bin/dyno-proxy"
+
+# ---------------------------------------------------------------------------
+# Bundle the Yaegi/Traefik plugins (catch, body, …) into the layer,
+# next to the binary. Traefik local plugins require the on-disk source path to
+# match the plugin's module/import path: the plugin's .traefik.yml `import:`
+# must be related to the configured moduleName, and Traefik resolves a
+# moduleName M under plugins-local/src/M. Each plugin declares
+# `module github.com/heroku/dyno-proxy/plugins/<name>` in its go.mod, so we copy
+# it into bin/plugins/<module> (e.g. bin/plugins/github.com/heroku/dyno-proxy/
+# plugins/body). At RUNTIME dyno-proxy discovers this dir (DYNO_PROXY_DIR, else a
+# `where` on its own executable) and links it into plugins-local/src, where the
+# Traefik resolves the full-import-path moduleName — see internal/engine
+# linkLocalPlugins and internal/traefik middleware.go.
+PLUGINS_SRC="${SCRIPT_DIR}/../plugins"
+if [[ -d "$PLUGINS_SRC" ]]; then
+  for plugin_dir in "$PLUGINS_SRC"/*/; do
+    gomod="${plugin_dir}go.mod"
+    [[ -f "$gomod" ]] || continue
+    module="$(awk '$1=="module"{print $2; exit}' "$gomod")"
+    if [[ -z "$module" ]]; then
+      echo "dyno-proxy: skipping ${plugin_dir}: no module declared in go.mod" >&2
+      continue
+    fi
+    dest="${DYNO_PROXY_BUILD_DIR}/bin/plugins/${module}"
+    mkdir -p "$dest"
+    cp -R "${plugin_dir}." "$dest/"
+  done
+else
+  echo "dyno-proxy: no plugins dir at ${PLUGINS_SRC}; skipping plugin bundling" >&2
+fi
+
+# ---------------------------------------------------------------------------
+# Publish the install dir (dyno-proxy binaries + bundled plugins) as
+# DYNO_PROXY_DIR so LATER buildpacks (build phase) and the running dyno (launch
+# phase) can locate it. CNB reads <layer>/env/* for both phases; the value is an
+# absolute layer path, which CNB remounts at the same location at launch.
+DYNO_PROXY_DIR="${DYNO_PROXY_BUILD_DIR}/bin"
+mkdir -p "${DYNO_PROXY_BUILD_DIR}/env"
+printf '%s' "${DYNO_PROXY_DIR}" > "${DYNO_PROXY_BUILD_DIR}/env/DYNO_PROXY_DIR.override"
+
+# ---------------------------------------------------------------------------
+# exec.d hook: the ONLY way the CNB buildpack starts dyno-proxy. We never read
+# or modify the Procfile and never declare a process type, so whichever
+# buildpack defines the `web` process (heroku/procfile, a language buildpack's
+# default) and wherever we sit in the group, exec.d still runs before every
+# launch. On an enabled web dyno the hook starts the LB-only
+# `dyno-proxy background` on the router $PORT and hands the app APP_PORT by
+# writing PORT/APP_PORT to fd 3, exactly like the classic .profile.d script
+# (bin/compile). It also writes DYNO_PROXY_FRONTED=1 so a web command the user
+# wrote as `dyno-proxy run -- ...` execs straight into the app instead of
+# starting a second LB.
+#
+# The launcher waits for EOF on EVERY copy of exec.d's fd 1, 2 and 3, so the
+# daemon must inherit none of them: stdin </dev/null, stdout/stderr go to the
+# launcher's own /proc/$PPID/fd/1,2 (the dyno log stream) or /dev/null, and fd
+# 3 is closed. The hook never exits non-zero (that aborts launch, rc 82).
+# ---------------------------------------------------------------------------
+rm -rf "${DYNO_PROXY_BUILD_DIR}/exec.d"
+mkdir -p "${DYNO_PROXY_BUILD_DIR}/exec.d"
+cat > "${DYNO_PROXY_BUILD_DIR}/exec.d/dyno-proxy" << 'EOF'
+#!/bin/bash
+# exec.d hook: start the background LB and point the app at APP_PORT, then
+# RETURN (see buildpack/bin/build for the fd 1/2/3 rules).
+
+# Exact web process-type match: web.<n> (Cedar) or web-<hash>-<id> (Fir).
+is_web=
+case "$DYNO" in
+  web.*) is_web=1 ;;
+  *.*|web-*-*-*) ;;
+  web-*-*) is_web=1 ;;
+esac
+
+if [ "$DISABLE_DYNO_PROXY" != "true" ] && [ "$DISABLE_DYNO_PROXY" != "TRUE" ] && [ "$DISABLE_DYNO_PROXY" != "1" ] \
+  && [ -n "$is_web" ]; then
+  log_level="${DYNO_PROXY_LOG_LEVEL:-ERROR}"
+  fronted=
+  case "$PORT" in ''|*[!0-9]*) port_ok= ;; *) port_ok=1 ;; esac
+  # DYNO_PROXY_FRONTED guards nested launcher invocations inside the dyno.
+  if [ -n "$port_ok" ] && [ -z "$DYNO_PROXY_FRONTED" ]; then
+    # APP_PORT defaults to the first port above PORT that nothing listens on
+    # (normally PORT+1). Fir runs a bind shim in the dyno on PORT+1/PORT+2
+    # ([::]:8001 -> app on 8000, health on 8002), so a blind PORT+1 makes the
+    # app's bind fail with EADDRINUSE. Same rule as engine.defaultAppPort.
+    app_port="$APP_PORT"
+    if [ -z "$app_port" ]; then
+      app_port=$((PORT + 1))
+      p=$app_port
+      while [ "$p" -le $((PORT + 20)) ]; do
+        if ! (exec 9<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null \
+          && ! (exec 9<>"/dev/tcp/::1/$p") 2>/dev/null; then
+          app_port=$p
+          break
+        fi
+        p=$((p + 1))
+      done
+    fi
+    out=/dev/null
+    err=/dev/null
+    [ -w "/proc/$PPID/fd/1" ] && out="/proc/$PPID/fd/1"
+    [ -w "/proc/$PPID/fd/2" ] && err="/proc/$PPID/fd/2"
+    # The daemon inherits this env, so it binds the ORIGINAL $PORT and routes
+    # to APP_PORT. PORT is only rewritten (below) if it started.
+    # --app-pid $PPID: our parent is the launcher, which execs the app in
+    # place (same pid), so $PPID is the dyno's main process. If the LB dies
+    # the daemon terminates it so the platform restarts the dyno; if it dies
+    # the daemon stops the LB.
+    if DYNO_PROXY_LOG_LEVEL="$log_level" APP_PORT="$app_port" \
+      dyno-proxy background --app-pid "$PPID" </dev/null >"$out" 2>"$err" 3>&-; then
+      fronted=1
+    fi
+  fi
+  # CNB exec.d contract: TOML string assignments on fd 3.
+  {
+    printf 'DYNO_PROXY_LOG_LEVEL = "%s"\n' "$log_level"
+    if [ -n "$fronted" ]; then
+      printf 'PORT = "%s"\n' "$app_port"
+      printf 'APP_PORT = "%s"\n' "$app_port"
+      printf 'DYNO_PROXY_FRONTED = "1"\n'
+    fi
+  } >&3 2>/dev/null || true
+fi
+exit 0
+EOF
+chmod +x "${DYNO_PROXY_BUILD_DIR}/exec.d/dyno-proxy"
+
+cat > "${DYNO_PROXY_BUILD_DIR}.toml" << EOL
+[types]
+build = true
+cache = true
+launch = true
+EOL
