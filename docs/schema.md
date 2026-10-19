@@ -87,6 +87,7 @@ to = "https://api-v2-beta.example.com/"
 
 | Field | Type | Category | |
 | --- | --- | --- | --- |
+| `routeID` | string | name | [Route ID](#route-id) |
 | `path` | string | matcher | [Path](#path) |
 | `header` | object | matcher | [Header](#header) |
 | `query` | object | matcher | [Query](#query) |
@@ -100,6 +101,23 @@ to = "https://api-v2-beta.example.com/"
 | `middleware` | array | middleware | [Raw middleware](#raw-traefik-middleware) |
 | `plugins` | array | middleware | [Plugins](#plugins) |
 | `routes` | array | nesting | [Nested rules](#nested-routes) |
+
+### Route ID
+
+An optional `routeID` is appended to the names of the Traefik router and service
+generated for the route (for example `route-0-api`, or
+`percentage-0-0-experiment-canary`), which makes them easy to find in the
+dashboard, metrics and logs. Characters other than letters, digits, `_` and `-`
+become `-`. A nested child without its own `routeID` uses its parent's. IDs are
+not required to be unique, since the generated names keep their position
+prefix.
+
+```toml
+[[routes]]
+routeID = "api"
+path = "/api"
+to = "https://api.example.com/"
+```
 
 ---
 
@@ -394,6 +412,8 @@ Everything a single route accepts, in one place (shown in project.toml format):
 
 ```toml
 [[routes]]
+routeID = "api"                           # string; appended to generated router/service names
+
 # ── Matchers (all populated matchers must pass) ─────────────
 path = "/api/*"                           # string; supports prefix (*) and regex (.*)
 methods = ["GET", "POST"]                 # array; matches any listed method

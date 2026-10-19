@@ -47,7 +47,7 @@ func TestLoad_OnlyBuildpack(t *testing.T) {
 schema-version = "0.2"
 
 [[io.buildpacks.group]]
-id = "heroku/ruby"
+routeID = "heroku/ruby"
 `)
 	if len(routes) != 0 {
 		t.Fatalf("expected no routes, got %d", len(routes))
@@ -82,7 +82,7 @@ func TestLoad_BasicRoutes(t *testing.T) {
 schema-version = "0.2"
 
 [[io.buildpacks.group]]
-id = "heroku/ruby"
+routeID = "heroku/ruby"
 
 [[routes]]
 path = "/api"
@@ -257,10 +257,10 @@ func TestLoad_BuildpackCoexistence(t *testing.T) {
 schema-version = "0.2"
 
 [[io.buildpacks.group]]
-id = "heroku/ruby"
+routeID = "heroku/ruby"
 
 [[io.buildpacks.group]]
-id = "heroku/procfile"
+routeID = "heroku/procfile"
 
 [[routes]]
 path = "/api"
@@ -354,5 +354,36 @@ middleware = [{ rateLimit = { average = 10, period = "1m" } }]
 	}
 	if _, ok := raw["rateLimit"]; !ok {
 		t.Errorf("expected rateLimit in raw, got %v", raw)
+	}
+}
+
+func TestRouteID(t *testing.T) {
+	routes := load(t, `
+[[routes]]
+routeID = "plain"
+path = "/a"
+to = "https://a.example.com"
+
+[[routes]]
+routeID = "parent"
+path = "/b"
+  [[routes.routes]]
+  routeID = "child"
+  to = "https://c.example.com"
+  [[routes.routes]]
+  to = "https://d.example.com"
+`)
+	var got []string
+	for _, r := range routes {
+		got = append(got, r.ID)
+	}
+	want := []string{"plain", "child", "parent"}
+	if len(got) != len(want) {
+		t.Fatalf("ids = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ids = %v, want %v", got, want)
+		}
 	}
 }

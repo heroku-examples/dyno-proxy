@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -123,7 +124,7 @@ func (st *renderState) addPlainRoute(i int, rt config.Route) error {
 		// No matchers: nothing to route (would shadow the default app router).
 		return nil
 	}
-	key := fmt.Sprintf("route-%d", i)
+	key := withID(fmt.Sprintf("route-%d", i), rt.ID)
 	mwNames, err := st.addMiddlewares(key, rt.Middlewares)
 	if err != nil {
 		return err
@@ -187,8 +188,8 @@ func (st *renderState) addPercentageRoutes(routes []config.Route) {
 			}
 
 			base := fmt.Sprintf("percentage-%d-%d", groupIndex, idx)
-			experimentService := base + "-experiment"
-			experimentRouter := base + "-experiment"
+			experimentService := withID(base+"-experiment", rt.ID)
+			experimentRouter := experimentService
 
 			startPct := cumulative
 			endPct := cumulative + pct
@@ -222,7 +223,7 @@ func (st *renderState) addPercentageRoutes(routes []config.Route) {
 						Servers:        []server{{URL: targetURL(rt)}},
 					},
 				}
-				mirrorName := base + "-mirror"
+				mirrorName := withID(base+"-mirror", rt.ID)
 				st.services[mirrorName] = &service{
 					Mirroring: &mirroring{
 						Service: "app",
@@ -383,3 +384,14 @@ func writeTOML(path string, v interface{}) error {
 	}
 	return nil
 }
+
+// withID appends a route's id to a generated router/service name. Characters
+// Traefik reserves in names (such as "@" and ".") are replaced with "-".
+func withID(name, id string) string {
+	if id == "" {
+		return name
+	}
+	return name + "-" + idUnsafe.ReplaceAllString(id, "-")
+}
+
+var idUnsafe = regexp.MustCompile(`[^A-Za-z0-9_-]`)

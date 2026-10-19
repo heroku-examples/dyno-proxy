@@ -24,6 +24,11 @@ type RouteModel struct {
 // more upstream targets and an ordered middleware chain. Generalized from the
 // source-level route without any Traefik coupling.
 type Route struct {
+	// ID is the optional `routeID` from project.toml. It is appended to the
+	// generated router and service names. A nested child without its own routeID
+	// inherits its parent's.
+	ID string
+
 	// Match holds the request-matching predicates. A request must satisfy all
 	// populated matchers.
 	Match Matcher

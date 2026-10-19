@@ -75,6 +75,28 @@ var goldenModels = []struct {
 		},
 	},
 	{
+		name: "route-ids",
+		model: config.RouteModel{
+			DefaultServiceURL: "http://localhost:5000",
+			Routes: []config.Route{
+				{ID: "api", Match: config.Matcher{Path: "/api"}, Targets: []config.Upstream{{URL: "http://localhost:8080"}}},
+				{Match: config.Matcher{Path: "/no-id"}, Targets: []config.Upstream{{URL: "http://localhost:8081"}}},
+				{
+					ID:      "with-mw",
+					Match:   config.Matcher{Path: "/x*"},
+					Targets: []config.Upstream{{URL: "http://localhost:8082"}},
+					Middlewares: []config.Middleware{
+						{Kind: config.CapSetHeader, Config: map[string]any{"header": "X-A", "value": "1"}},
+						{Kind: config.CapSetPath, Config: map[string]any{"path": "/y"}},
+						{Kind: config.CapRawTraefikPlugin, Config: map[string]any{"raw": map[string]interface{}{"stripPrefix": map[string]interface{}{"prefixes": []string{"/x"}}}}},
+					},
+				},
+				{ID: "canary.v2", Match: config.Matcher{Path: "/exp"}, Percentage: 50, Targets: []config.Upstream{{URL: "http://localhost:9001"}}},
+				{ID: "shadow", Match: config.Matcher{Path: "/shadow"}, Mirror: true, Targets: []config.Upstream{{URL: "http://localhost:9002"}}},
+			},
+		},
+	},
+	{
 		name: "dashboard-and-metrics",
 		model: config.RouteModel{
 			DefaultServiceURL: "http://localhost:5000",

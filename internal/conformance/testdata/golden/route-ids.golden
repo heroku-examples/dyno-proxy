@@ -1,0 +1,137 @@
+=== FILE: app.dyno-proxy-static.toml ===
+[accessLog]
+  format = "common"
+  [accessLog.fields]
+    defaultMode = "drop"
+    [accessLog.fields.headers]
+      defaultMode = "drop"
+      [accessLog.fields.headers.names]
+        Host = "keep"
+        X-Request-ID = "keep"
+    [accessLog.fields.names]
+      ClientUsername = "drop"
+      Duration = "keep"
+      RequestHeader = "drop"
+      RequestHost = "keep"
+      RequestMethod = "keep"
+      RequestPath = "keep"
+      RequestProtocol = "drop"
+      RequestScheme = "drop"
+      RequestURI = "keep"
+      ResponseCode = "keep"
+      ResponseSize = "keep"
+      ServiceURL = "keep"
+
+[entryPoints]
+  [entryPoints.web]
+    address = ":8888"
+    [entryPoints.web.forwardedHeaders]
+      trustedIPs = ["0.0.0.0/0"]
+
+[global]
+  checkNewVersion = false
+  sendAnonymousUsage = false
+
+[log]
+  format = "common"
+  level = "INFO"
+
+[providers]
+  [providers.file]
+    filename = "<DIR>/app.dyno-proxy-dynamic.toml"
+    watch = true
+=== FILE: app.dyno-proxy-dynamic.toml ===
+[http]
+  [http.middlewares]
+    [http.middlewares.route-2-with-mw-plugin-2]
+      [http.middlewares.route-2-with-mw-plugin-2.stripPrefix]
+        prefixes = ["/x"]
+    [http.middlewares.route-2-with-mw-set-headers]
+      [http.middlewares.route-2-with-mw-set-headers.headers]
+        [http.middlewares.route-2-with-mw-set-headers.headers.customRequestHeaders]
+          X-A = "1"
+    [http.middlewares.route-2-with-mw-set-path-1]
+      [http.middlewares.route-2-with-mw-set-path-1.replacePath]
+        path = "/y"
+  [http.routers]
+    [http.routers.app]
+      rule = "PathPrefix(`/`)"
+      service = "app"
+      entryPoints = ["web"]
+      priority = 1
+    [http.routers.percentage-0-0-experiment-canary-v2]
+      rule = "Path(`/exp`) && HeaderRegexp(`x-request-id`, `[0-7][0-9a-f]$`)"
+      service = "percentage-0-0-experiment-canary-v2"
+      entryPoints = ["web"]
+      priority = 50
+    [http.routers.percentage-1-0-experiment-shadow]
+      rule = "Path(`/shadow`)"
+      service = "percentage-1-0-mirror-shadow"
+      entryPoints = ["web"]
+      priority = 50
+    [http.routers.route-0-api]
+      rule = "Path(`/api`)"
+      service = "route-0-api"
+      entryPoints = ["web"]
+      priority = 10
+    [http.routers.route-1]
+      rule = "Path(`/no-id`)"
+      service = "route-1"
+      entryPoints = ["web"]
+      priority = 10
+    [http.routers.route-2-with-mw]
+      rule = "PathPrefix(`/x`)"
+      service = "route-2-with-mw"
+      entryPoints = ["web"]
+      priority = 10
+      middlewares = ["route-2-with-mw-set-path-1", "route-2-with-mw-plugin-2", "route-2-with-mw-set-headers"]
+  [http.services]
+    [http.services.app]
+      [http.services.app.loadBalancer]
+        passHostHeader = true
+        strategy = "p2c"
+
+        [[http.services.app.loadBalancer.servers]]
+          url = "http://localhost:5000"
+    [http.services.percentage-0-0-experiment-canary-v2]
+      [http.services.percentage-0-0-experiment-canary-v2.loadBalancer]
+        passHostHeader = false
+        strategy = "p2c"
+
+        [[http.services.percentage-0-0-experiment-canary-v2.loadBalancer.servers]]
+          url = "http://localhost:9001"
+    [http.services.percentage-1-0-experiment-shadow]
+      [http.services.percentage-1-0-experiment-shadow.loadBalancer]
+        passHostHeader = false
+        strategy = "p2c"
+
+        [[http.services.percentage-1-0-experiment-shadow.loadBalancer.servers]]
+          url = "http://localhost:9002"
+    [http.services.percentage-1-0-mirror-shadow]
+      [http.services.percentage-1-0-mirror-shadow.mirroring]
+        service = "app"
+
+        [[http.services.percentage-1-0-mirror-shadow.mirroring.mirrors]]
+          name = "percentage-1-0-experiment-shadow"
+          percent = 100
+    [http.services.route-0-api]
+      [http.services.route-0-api.loadBalancer]
+        passHostHeader = false
+        strategy = "p2c"
+
+        [[http.services.route-0-api.loadBalancer.servers]]
+          url = "http://localhost:8080"
+    [http.services.route-1]
+      [http.services.route-1.loadBalancer]
+        passHostHeader = false
+        strategy = "p2c"
+
+        [[http.services.route-1.loadBalancer.servers]]
+          url = "http://localhost:8081"
+    [http.services.route-2-with-mw]
+      [http.services.route-2-with-mw.loadBalancer]
+        passHostHeader = false
+        strategy = "p2c"
+
+        [[http.services.route-2-with-mw.loadBalancer.servers]]
+          url = "http://localhost:8082"

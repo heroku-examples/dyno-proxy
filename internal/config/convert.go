@@ -12,6 +12,7 @@ import (
 // enough to build a Route: matchers, a target, and the ordered middleware
 // directives (plugins, middleware, catch, body, set).
 type route struct {
+	ID         string            `toml:"routeID"`
 	Path       string            `toml:"path"`
 	To         string            `toml:"to"`
 	Header     map[string]string `toml:"header"`
@@ -59,6 +60,7 @@ type catchItem struct {
 func buildRoutes(r route, getenv func(string) string) []Route {
 	if len(r.Routes) == 0 {
 		return []Route{{
+			ID:          r.ID,
 			Match:       buildMatcher(r),
 			Targets:     []Upstream{resolveTarget(r, getenv)},
 			Percentage:  r.Percentage,
@@ -76,7 +78,12 @@ func buildRoutes(r route, getenv func(string) string) []Route {
 		// parent's `to`; a child without one falls back to the default app
 		// service).
 		mw := append(append([]Middleware{}, parentMW...), buildMiddlewares(child)...)
+		id := child.ID
+		if id == "" {
+			id = r.ID
+		}
 		routes = append(routes, Route{
+			ID:          id,
 			Match:       mergeMatchers(parentMatch, buildMatcher(child)),
 			Targets:     []Upstream{resolveTarget(child, getenv)},
 			Percentage:  child.Percentage,
