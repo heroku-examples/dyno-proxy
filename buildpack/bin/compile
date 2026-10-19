@@ -37,7 +37,7 @@ case "$(uname -m)" in
 esac
 
 # Traefik is the load balancer the dyno-proxy supervisor launches at runtime.
-TRAEFIK_VERSION="${TRAEFIK_VERSION:-3.7.13}"
+TRAEFIK_VERSION="${TRAEFIK_VERSION:-3.7.14}"
 case "$TRAEFIK_VERSION" in v*) ;; *) TRAEFIK_VERSION="v${TRAEFIK_VERSION}" ;; esac
 TRAEFIK_URL="https://github.com/traefik/traefik/releases/download/${TRAEFIK_VERSION}/traefik_${TRAEFIK_VERSION}_${platform}_${arch}.tar.gz"
 CACHED_BINARY="$CACHE_DIR/traefik-${TRAEFIK_VERSION}"

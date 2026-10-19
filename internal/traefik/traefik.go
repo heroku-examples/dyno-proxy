@@ -16,7 +16,7 @@ import (
 // mirrors in sync automatically. If you edit this line by hand, update the two
 // buildpack defaults to match, and keep the const's shape (`= "vX.Y.Z"`) stable
 // so the greps in test.yml and bump-traefik.yml keep matching.
-const defaultTraefikVersion = "v3.7.13"
+const defaultTraefikVersion = "v3.7.14"
 
 // Options carries render-time inputs beyond the model itself.
 type Options struct {
