@@ -130,11 +130,17 @@ func (st *renderState) addPlainRoute(i int, rt config.Route) error {
 		return err
 	}
 
+	// Routes that match on a header, query param, or body field are more
+	// specific than percentage splits, so they outrank them.
+	priority := 10
+	if len(rt.Match.Headers) > 0 || len(rt.Match.Query) > 0 || len(rt.Match.Body) > 0 {
+		priority = 60
+	}
 	rtr := &router{
 		Rule:        strings.Join(parts, " && "),
 		Service:     key,
 		EntryPoints: []string{"web"},
-		Priority:    intPtr(10),
+		Priority:    intPtr(priority),
 	}
 	if len(mwNames) > 0 {
 		rtr.Middlewares = mwNames

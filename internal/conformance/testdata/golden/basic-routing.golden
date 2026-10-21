@@ -67,12 +67,12 @@
       rule = "Header(`x-custom-header`, `proxy-server`)"
       service = "route-3"
       entryPoints = ["web"]
-      priority = 10
+      priority = 60
     [http.routers.route-4]
       rule = "QueryRegexp(`x-q`, `yo-.*`)"
       service = "route-4"
       entryPoints = ["web"]
-      priority = 10
+      priority = 60
     [http.routers.route-5]
       rule = "Path(`/m`) && Method(`POST`)"
       service = "route-5"
