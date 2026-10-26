@@ -7,7 +7,7 @@ DYNO_PROXY_BUILD_DIR="${CNB_LAYERS_DIR}/dyno-proxy"
 # runtime.
 download_traefik() {
   local version url
-  version="${TRAEFIK_VERSION:-3.7.13}"
+  version="${TRAEFIK_VERSION:-3.7.15}"
   case "$version" in v*) ;; *) version="v${version}" ;; esac
   url="https://github.com/traefik/traefik/releases/download/${version}/traefik_${version}_linux_${CNB_TARGET_ARCH}.tar.gz"
 
